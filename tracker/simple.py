@@ -10,7 +10,8 @@ from tqdm import tqdm
 from passiveRadar.config import getConfiguration
 from passiveRadar.target_detection import simple_target_tracker
 from passiveRadar.target_detection import CFAR_2D
-
+from passiveRadar.target_detection import kalman_update_with_position
+from passiveRadar.target_detection import plot_target_trajectory
 
 def simple_tracker(config, xambg):
     print("Loaded range-doppler maps.")
@@ -46,6 +47,30 @@ def simple_tracker(config, xambg):
     plt.ylabel('Bistatic Range (km)')
     plt.show()
 
+
+def simple_dkr_tracker(config, xambg):
+    print("Loaded range-doppler maps.")
+    Nframes = xambg.shape[2]
+    print("Applying CFAR filter...")
+    
+    CF = np.zeros(xambg.shape)
+    for i in tqdm(range(Nframes)):
+        CF[:, :, i] = CFAR_2D(xambg[:, :, i], 18, 4)
+
+    print("Applying Kalman Filter...")
+    history = simple_target_tracker(CF, config['max_range_actual'], config['max_doppler_actual'])
+
+    estimate = history['estimate']
+    lockMode = history['lock_mode']
+    
+    trajectory = []  # List to store the target's trajectory (x, y)
+    
+    for i in range(Nframes):
+        # Process each frame to update the target state
+        updated_position, new_state = kalman_update_with_position(estimate[i], history[i], 0, 0, 100, 0)  # Example coordinates
+        trajectory.append(updated_position)
+    
+    plot_target_trajectory(trajectory)
 
 if __name__ == "__main__":
     config = getConfiguration()

@@ -3,6 +3,7 @@
 import numpy as np
 from passiveRadar.signal_utils import normalize
 import scipy.signal as signal
+import matplotlib.pyplot as plt
 
 
 # create a data type to represent the Kalman filter's internals
@@ -701,3 +702,215 @@ def CFAR_2D(X, fw, gw, thresh = None):
         return CR
     else:
         return CR > thresh
+
+
+def simple_target_tracker_with_position(data, x_tx, y_tx, x_rx, y_rx):
+    N_measurements = data.shape[2]
+    trackStates = np.empty((N_measurements,), dtype=kalman_filter_dtype)
+
+    # Initialize target tracks
+    for i in range(trackStates.shape[0]):
+        trackStates[i] = initialize_track(None)
+
+    # Store tracking history (including position)
+    tracker_history = np.empty((N_measurements,), dtype=kalman_filter_dtype)
+
+    for i in range(N_measurements):
+        dataFrame = data[:, :, i]
+
+        # Normalize the data frame and get new measurements
+        dataFrame = dataFrame / np.mean(np.abs(dataFrame).flatten())
+        dataFrame = np.fliplr(dataFrame.T)
+
+        # Extract Bistatic Range from measurements (for simplicity, use the first frame)
+        measurement = np.array([50, 60])  # Example measurement for testing
+
+        # Update the track with the new position estimate
+        updatedEstimate, newState = kalman_update_with_position(measurement, trackStates[i], x_tx, y_tx, x_rx, y_rx)
+
+        # Save the updated state
+        trackStates[i] = newState
+        tracker_history[i] = updatedEstimate
+
+    return tracker_history
+
+
+# 计算 Bistatic 交点 (笛卡尔坐标)
+def bistatic_to_cartesian(R_tx, R_rx, x_tx, y_tx, x_rx, y_rx):
+    """
+    计算目标的笛卡尔坐标，基于 Bistatic Range 和目标到接收机/发射机的距离
+    :param R_tx: 目标到发射机的距离
+    :param R_rx: 目标到接收机的距离
+    :param x_tx: 发射机的 x 坐标
+    :param y_tx: 发射机的 y 坐标
+    :param x_rx: 接收机的 x 坐标
+    :param y_rx: 接收机的 y 坐标
+    :return: 目标的笛卡尔坐标 (x, y)
+    """
+    # 假设目标位于平面上，通过解方程求目标位置
+    A = 2 * (x_tx - x_rx)
+    B = 2 * (y_tx - y_rx)
+    C = R_rx**2 - R_tx**2 - x_rx**2 + x_tx**2 - y_rx**2 + y_tx**2
+
+    # 通过线性代数计算 x 和 y 的位置
+    x = C / A
+    y = (R_tx**2 - (x - x_tx)**2)**0.5
+
+    return x, y
+
+# # 示例调用
+# x_tx, y_tx = 0, 0  # 发射机位置
+# x_rx, y_rx = 100, 0  # 接收机位置
+# R_tx = 50  # 目标到发射机的距离
+# R_rx = 60  # 目标到接收机的距离
+
+# target_x, target_y = bistatic_to_cartesian(R_tx, R_rx, x_tx, y_tx, x_rx, y_rx)
+# print(f"Target Position (Cartesian): x = {target_x}, y = {target_y}")
+
+# Example target tracker update function
+def update_track_with_position(currentState, newMeasurement, x_tx, y_tx, x_rx, y_rx):
+    """
+    Update target tracker state with position calculation in Cartesian coordinates.
+    
+    :param currentState: Current state of the target track (including Kalman state)
+    :param newMeasurement: New measurement for the current timestep
+    :param x_tx: Transmitter x-coordinate
+    :param y_tx: Transmitter y-coordinate
+    :param x_rx: Receiver x-coordinate
+    :param y_rx: Receiver y-coordinate
+    :return: Updated target state with position in Cartesian coordinates
+    """
+    # Extract the current Kalman filter state and other information
+    kalmanState = currentState['kalman_state']
+    range_tx = newMeasurement[0]  # Bistatic Range to transmitter
+    range_rx = newMeasurement[1]  # Bistatic Range to receiver
+
+    # Convert from Bistatic Range to Cartesian coordinates
+    target_x, target_y = bistatic_to_cartesian(range_tx, range_rx, x_tx, y_tx, x_rx, y_rx)
+    
+    # Here you can integrate the position with the Kalman filter update (if needed)
+    # For example, update the Kalman filter state with the new position information
+
+    # Simulating a simple Kalman filter update for position (just for illustration)
+    # Update the Kalman filter state (this can be more complex based on your Kalman update logic)
+    updatedEstimate = np.array([target_x, target_y])  # Updated estimate with Cartesian position
+    
+    # Example: Constructing the updated state
+    updatedState = currentState.copy()
+    updatedState['estimate'] = updatedEstimate  # Update the estimate with new position
+
+    # Return the updated state
+    return updatedState
+
+# # Example usage
+# currentState = {
+#     'kalman_state': np.zeros(10),  # Kalman filter state
+#     'estimate': np.array([0, 0]),  # Initial estimate of position
+#     'measurement': np.array([50, 60]),  # Initial measurement (Bistatic Range)
+# }
+
+# # Assume these are the coordinates of the transmitter and receiver
+# x_tx, y_tx = 0, 0  # Transmitter at origin
+# x_rx, y_rx = 100, 0  # Receiver 100 km away on the x-axis
+
+# newMeasurement = np.array([50, 60])  # New Bistatic Range measurement
+
+# # Update the target state with new position
+# updatedState = update_track_with_position(currentState, newMeasurement, x_tx, y_tx, x_rx, y_rx)
+
+# print("Updated target position:", updatedState['estimate'])
+
+def multitarget_tracker_with_position(data, frame_extent, N_TRACKS, x_tx, y_tx, x_rx, y_rx):
+    Nframes = data.shape[2]
+    trackStates = np.empty((N_TRACKS,), dtype=target_track_dtype)
+
+    # Initialize target tracks
+    for i in range(trackStates.shape[0]):
+        trackStates[i] = initialize_track(None)
+
+    # Store tracking history (now including position)
+    tracker_history = np.empty((Nframes, N_TRACKS), dtype=target_track_dtype)
+
+    # Loop through frames
+    for i in range(Nframes):
+        dataFrame = data[:, :, i]
+
+        # Get candidate measurements for this frame
+        candidateMeas = get_measurements(dataFrame, 99.8, frame_extent)
+
+        for track_idx in range(N_TRACKS):
+            trackState = trackStates[track_idx]
+            newMeasurement, candidateMeas = associate_measurements(trackState, candidateMeas)
+            
+            # Update with new position using bistatic_to_cartesian
+            updatedState = update_track_with_position(trackState, newMeasurement, x_tx, y_tx, x_rx, y_rx)
+            trackStates[track_idx] = updatedState
+
+        tracker_history[i, :] = trackStates
+
+    return tracker_history
+
+def kalman_update_with_position(measurement, currentState, x_tx, y_tx, x_rx, y_rx):
+    """
+    Kalman filter update with position estimation.
+    
+    :param measurement: Current measurement (Bistatic Range)
+    :param currentState: Current Kalman filter state
+    :param x_tx: Transmitter x-coordinate
+    :param y_tx: Transmitter y-coordinate
+    :param x_rx: Receiver x-coordinate
+    :param y_rx: Receiver y-coordinate
+    :return: Updated Kalman filter state
+    """
+    
+    x = currentState['x']
+    P = currentState['P']
+    F1 = currentState['F1']
+    F2 = currentState['F2']
+    Q = currentState['Q']
+    H = currentState['H']
+    R = currentState['R']
+    S = currentState['S']
+    
+    # Perform Kalman filter prediction and update (standard steps)
+    x = F1 @ x
+    P = F2 @ P @ F2.T + Q
+    S = H @ P @ H.T + R
+    K = P @ H.T @ np.linalg.inv(S)
+    
+    Z = measurement
+    y = Z - H @ x
+    x = x + K @ y
+    P = (np.eye(4) - K @ H) @ P
+
+    # Use Bistatic Range to estimate the target's Cartesian position
+    R_tx, R_rx = measurement
+    target_x, target_y = bistatic_to_cartesian(R_tx, R_rx, x_tx, y_tx, x_rx, y_rx)
+    
+    # Update the state estimate with the new position
+    updatedEstimate = np.array([target_x, target_y])
+
+    # Construct new state
+    newState = (x, P, F1, F2, Q, H, R, S)
+    
+    return updatedEstimate, newState
+
+# import matplotlib.pyplot as plt
+
+def plot_target_trajectory(trajectory, title="Target Tracking"):
+    """
+    Plot the target trajectory on a 2D plot.
+    
+    :param trajectory: List of target positions (x, y)
+    :param title: Title of the plot
+    """
+    x_vals = [pos[0] for pos in trajectory]
+    y_vals = [pos[1] for pos in trajectory]
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(x_vals, y_vals, marker='o', linestyle='-', color='b')
+    plt.title(title)
+    plt.xlabel('X Position (km)')
+    plt.ylabel('Y Position (km)')
+    plt.grid(True)
+    plt.show()
