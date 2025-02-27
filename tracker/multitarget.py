@@ -12,6 +12,7 @@ from passiveRadar.target_detection import multitarget_tracker
 from passiveRadar.target_detection import CFAR_2D
 from passiveRadar.target_detection import kalman_update_with_position
 from passiveRadar.target_detection import plot_target_trajectory
+from passiveRadar.target_detection import multitarget_tracker_with_position   
 
 
 def parse_args():
@@ -104,7 +105,7 @@ def multitarget_dkr_track_and_plot(config, xambg, image_path):
 
     print("Applying Kalman Filter...")
     N_TRACKS = 10
-    tracker_history = multitarget_tracker(CF, [config['max_doppler_actual'], config['max_range_actual']], N_TRACKS)
+    tracker_history = multitarget_tracker_with_position(CF, [config['max_doppler_actual'], config['max_range_actual']], N_TRACKS)
 
     trajectory = []  # List to store the trajectories of all targets
     for i in range(Nframes):

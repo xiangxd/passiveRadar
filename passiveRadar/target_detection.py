@@ -7,15 +7,26 @@ import matplotlib.pyplot as plt
 
 
 # create a data type to represent the Kalman filter's internals
+# kalman_filter_dtype = np.dtype([
+#     ('x' , np.float, (4, )),   # state estimate vector
+#     ('P' , np.float, (4,4)),   # state estimate covariance matrix
+#     ('F1', np.float, (4,4)),   # state transition model #1
+#     ('F2', np.float, (4,4)),   # state transition model #2
+#     ('Q' , np.float, (4,4)),   # process noise covariance matrix
+#     ('H' , np.float, (2,4)),   # measurement matrix
+#     ('R' , np.float, (2,2)),   # measurement noise covariance matrix
+#     ('S' , np.float, (2,2))])  # innovation covariance matrix
+
+# Kalman filter state (包含目标的 x, y 位置，目标的速度，以及发射机和接收机的坐标)
 kalman_filter_dtype = np.dtype([
-    ('x' , np.float, (4, )),   # state estimate vector
-    ('P' , np.float, (4,4)),   # state estimate covariance matrix
-    ('F1', np.float, (4,4)),   # state transition model #1
-    ('F2', np.float, (4,4)),   # state transition model #2
-    ('Q' , np.float, (4,4)),   # process noise covariance matrix
-    ('H' , np.float, (2,4)),   # measurement matrix
-    ('R' , np.float, (2,2)),   # measurement noise covariance matrix
-    ('S' , np.float, (2,2))])  # innovation covariance matrix
+    ('x', np.float, (6,)),  # 扩展状态向量 [目标位置x, 目标位置y, 目标速度x, 目标速度y, 发射机位置x, 发射机位置y, 接收机位置x, 接收机位置y]
+    ('P', np.float, (6, 6)),  # 状态协方差矩阵
+    ('F1', np.float, (6, 6)),  # 状态转移矩阵 #1
+    ('F2', np.float, (6, 6)),  # 状态转移矩阵 #2
+    ('Q', np.float, (6, 6)),  # 过程噪声协方差矩阵
+    ('H', np.float, (2, 6)),  # 测量矩阵 (只测量目标的位置)
+    ('R', np.float, (2, 2)),  # 测量噪声协方差矩阵
+    ('S', np.float, (2, 2))])  # 创新协方差矩阵
 
 def kalman_update(measurement, currentState):
     ''' The standard Kalman filter update algorithm
@@ -767,6 +778,47 @@ def bistatic_to_cartesian(R_tx, R_rx, x_tx, y_tx, x_rx, y_rx):
 # target_x, target_y = bistatic_to_cartesian(R_tx, R_rx, x_tx, y_tx, x_rx, y_rx)
 # print(f"Target Position (Cartesian): x = {target_x}, y = {target_y}")
 
+def bistatic_to_cartesian_3d(R_tx, R_rx, x_tx, y_tx, z_tx, x_rx, y_rx, z_rx):
+    """
+    计算目标的三维笛卡尔坐标，基于 Bistatic Range 和目标到接收机/发射机的距离。
+    
+    :param R_tx: 目标到发射机的距离
+    :param R_rx: 目标到接收机的距离
+    :param x_tx: 发射机的 x 坐标
+    :param y_tx: 发射机的 y 坐标
+    :param z_tx: 发射机的 z 坐标
+    :param x_rx: 接收机的 x 坐标
+    :param y_rx: 接收机的 y 坐标
+    :param z_rx: 接收机的 z 坐标
+    :return: 目标的三维笛卡尔坐标 (x, y, z)
+    """
+    # 计算目标位置的 x 和 y 坐标
+    A = 2 * (x_tx - x_rx)
+    B = 2 * (y_tx - y_rx)
+    C = R_rx**2 - R_tx**2 - x_rx**2 + x_tx**2 - y_rx**2 + y_tx**2
+
+    x = C / A
+    y = (R_tx**2 - (x - x_tx)**2)**0.5
+
+    # 计算目标位置的 z 坐标
+    # 解方程来计算 z 坐标
+    D = 2 * (z_tx - z_rx)
+    E = R_rx**2 - R_tx**2 - z_rx**2 + z_tx**2
+
+    z = E / D
+
+    return x, y, z
+
+# # 示例调用
+# x_tx, y_tx, z_tx = 0, 0, 0  # 发射机位置
+# x_rx, y_rx, z_rx = 100, 0, 0  # 接收机位置
+# R_tx = 50  # 目标到发射机的距离
+# R_rx = 60  # 目标到接收机的距离
+
+# target_x, target_y, target_z = bistatic_to_cartesian_3d(R_tx, R_rx, x_tx, y_tx, z_tx, x_rx, y_rx, z_rx)
+# print(f"Target Position (Cartesian): x = {target_x}, y = {target_y}, z = {target_z}")
+
+
 # Example target tracker update function
 def update_track_with_position(currentState, newMeasurement, x_tx, y_tx, x_rx, y_rx):
     """
@@ -820,7 +872,7 @@ def update_track_with_position(currentState, newMeasurement, x_tx, y_tx, x_rx, y
 
 # print("Updated target position:", updatedState['estimate'])
 
-def multitarget_tracker_with_position(data, frame_extent, N_TRACKS, x_tx, y_tx, x_rx, y_rx):
+def multitarget_tracker_with_position(data, frame_extent, N_TRACKS):
     Nframes = data.shape[2]
     trackStates = np.empty((N_TRACKS,), dtype=target_track_dtype)
 
@@ -850,19 +902,20 @@ def multitarget_tracker_with_position(data, frame_extent, N_TRACKS, x_tx, y_tx, 
 
     return tracker_history
 
-def kalman_update_with_position(measurement, currentState, x_tx, y_tx, x_rx, y_rx):
+def kalman_update_with_position(measurement, currentState, prev_x_tx, prev_y_tx, prev_x_rx, prev_y_rx):
     """
-    Kalman filter update with position estimation.
+    计算目标的笛卡尔坐标，并动态获取发射机和接收机的位置
     
-    :param measurement: Current measurement (Bistatic Range)
-    :param currentState: Current Kalman filter state
-    :param x_tx: Transmitter x-coordinate
-    :param y_tx: Transmitter y-coordinate
-    :param x_rx: Receiver x-coordinate
-    :param y_rx: Receiver y-coordinate
-    :return: Updated Kalman filter state
+    :param measurement: 当前测量值（Bistatic Range）
+    :param currentState: 当前 Kalman 滤波器状态
+    :param prev_x_tx: 上次发射机的 x 坐标
+    :param prev_y_tx: 上次发射机的 y 坐标
+    :param prev_x_rx: 上次接收机的 x 坐标
+    :param prev_y_rx: 上次接收机的 y 坐标
+    :return: 更新后的目标位置和状态
     """
     
+    # 从当前状态中提取目标位置、速度、发射机和接收机位置
     x = currentState['x']
     P = currentState['P']
     F1 = currentState['F1']
@@ -871,6 +924,62 @@ def kalman_update_with_position(measurement, currentState, x_tx, y_tx, x_rx, y_r
     H = currentState['H']
     R = currentState['R']
     S = currentState['S']
+
+    # 提取发射机和接收机的坐标（从 Kalman 状态中提取）
+    x_tx, y_tx, x_rx, y_rx = x[4], x[5], x[6], x[7]
+
+    # 更新目标位置、速度（标准的 Kalman 滤波器步骤）
+    x = F1 @ x
+    P = F2 @ P @ F2.T + Q
+    S = H @ P @ H.T + R
+    K = P @ H.T @ np.linalg.inv(S)
+    
+    Z = measurement
+    y = Z - H @ x
+    x = x + K @ y
+    P = (np.eye(6) - K @ H) @ P
+
+    # 动态更新发射机和接收机的位置
+    # 假设接收机和发射机根据某些测量或运动模型进行动态更新
+    # 这里使用示例值，你可以根据实际应用情况来调整
+    updated_x_tx = prev_x_tx + 1  # 假设发射机位置变化（例如，沿 x 轴移动）
+    updated_y_tx = prev_y_tx
+    updated_x_rx = prev_x_rx + 1  # 假设接收机位置变化（例如，沿 x 轴移动）
+    updated_y_rx = prev_y_rx
+
+    # 使用 Bistatic Range 更新目标位置
+    R_tx, R_rx = measurement
+    target_x, target_y = bistatic_to_cartesian(R_tx, R_rx, updated_x_tx, updated_y_tx, updated_x_rx, updated_y_rx)
+    
+    updated_position = np.array([target_x, target_y])
+    
+    # 返回更新后的目标位置和状态
+    newState = (x, P, F1, F2, Q, H, R, S)
+    
+    return updated_position, newState
+
+def kalman_update_with_position(measurement, currentState, time_step):
+    """
+    Kalman filter update with position estimation.
+    Kalman 滤波器更新，计算目标的笛卡尔坐标，并动态获取发射机和接收机的位置。
+    
+    :param measurement: Current measurement (Bistatic Range)
+    :param currentState: Current Kalman filter state
+    :param time_step: 当前时间步长，用于更新发射机和接收机位置
+    :return: Updated Kalman filter state
+    """
+    # 从当前状态中提取目标位置、速度、发射机和接收机位置
+    x = currentState['x']
+    P = currentState['P']
+    F1 = currentState['F1']
+    F2 = currentState['F2']
+    Q = currentState['Q']
+    H = currentState['H']
+    R = currentState['R']
+    S = currentState['S']
+
+    # 获取发射机和接收机的坐标（从 Kalman 状态中提取）
+    x_tx, y_tx, x_rx, y_rx = x[4], x[5], x[6], x[7]
     
     # Perform Kalman filter prediction and update (standard steps)
     x = F1 @ x
@@ -881,7 +990,7 @@ def kalman_update_with_position(measurement, currentState, x_tx, y_tx, x_rx, y_r
     Z = measurement
     y = Z - H @ x
     x = x + K @ y
-    P = (np.eye(4) - K @ H) @ P
+    P = (np.eye(6) - K @ H) @ P
 
     # Use Bistatic Range to estimate the target's Cartesian position
     R_tx, R_rx = measurement
@@ -890,10 +999,60 @@ def kalman_update_with_position(measurement, currentState, x_tx, y_tx, x_rx, y_r
     # Update the state estimate with the new position
     updatedEstimate = np.array([target_x, target_y])
 
+    # 动态更新发射机和接收机的位置
+    updated_x_tx, updated_y_tx, updated_x_rx, updated_y_rx = dynamic_position_update(x_tx, y_tx, x_rx, y_rx, time_step)
+    
+    # 更新 Kalman 状态中的发射机和接收机位置
+    x[4], x[5], x[6], x[7] = updated_x_tx, updated_y_tx, updated_x_rx, updated_y_rx
+  
     # Construct new state
     newState = (x, P, F1, F2, Q, H, R, S)
     
     return updatedEstimate, newState
+
+def kalman_update_with_doa_and_elevation(measurement, currentState, time_step):
+    """
+    使用 DOA 和仰角来更新目标的位置和状态
+    :param measurement: 目标的 DOA 和仰角
+    :param currentState: 当前 Kalman 滤波器状态
+    :param time_step: 当前时间步长
+    :return: 更新后的目标位置和状态
+    """
+    
+    # 从当前状态中提取目标位置、速度
+    x = currentState['x']
+    P = currentState['P']
+    F1 = currentState['F1']
+    F2 = currentState['F2']
+    Q = currentState['Q']
+    H = currentState['H']
+    R = currentState['R']
+    S = currentState['S']
+    
+    # 提取 DOA 和仰角信息
+    azimuth, elevation = measurement[0], measurement[1]
+    
+    # 更新目标位置、速度（标准的 Kalman 滤波器步骤）
+    x = F1 @ x
+    P = F2 @ P @ F2.T + Q
+    S = H @ P @ H.T + R
+    K = P @ H.T @ np.linalg.inv(S)
+    
+    Z = measurement  # 使用 DOA 和仰角作为测量
+    y = Z - H @ x
+    x = x + K @ y
+    P = (np.eye(6) - K @ H) @ P
+
+    # 估算目标的位置
+    range_estimate = 100  # 这里是一个假设的估计值，可以通过 Bistatic Range 等方法获取
+    target_x, target_y = doa_to_position(azimuth, elevation, range_estimate, x[4], x[5])  # 假设发射机/接收机坐标为 (x[4], x[5])
+    
+    updated_position = np.array([target_x, target_y])
+    
+    # 返回更新后的目标位置和状态
+    newState = (x, P, F1, F2, Q, H, R, S)
+    
+    return updated_position, newState
 
 # import matplotlib.pyplot as plt
 
@@ -914,3 +1073,42 @@ def plot_target_trajectory(trajectory, title="Target Tracking"):
     plt.ylabel('Y Position (km)')
     plt.grid(True)
     plt.show()
+
+# 动态计算发射机和接收机的坐标，假设它们的位置随着时间变化
+def dynamic_position_update(prev_x_tx, prev_y_tx, prev_x_rx, prev_y_rx, time_step):
+    """
+    假设发射机和接收机位置随着时间变化
+    :param prev_x_tx: 发射机上一步的位置x
+    :param prev_y_tx: 发射机上一步的位置y
+    :param prev_x_rx: 接收机上一步的位置x
+    :param prev_y_rx: 接收机上一步的位置y
+    :param time_step: 当前时间步长，用于更新发射机和接收机位置
+    :return: 更新后的发射机和接收机位置
+    """
+    # 假设发射机和接收机沿着x轴移动，具体移动模型可以根据实际情况调整
+    updated_x_tx = prev_x_tx + 1 * time_step  # 发射机位置每秒移动1单位
+    updated_y_tx = prev_y_tx  # 假设y轴不动
+    updated_x_rx = prev_x_rx + 0.5 * time_step  # 接收机位置每秒移动0.5单位
+    updated_y_rx = prev_y_rx  # 假设y轴不动
+
+    return updated_x_tx, updated_y_tx, updated_x_rx, updated_y_rx
+
+def doa_to_position(azimuth, elevation, range_estimate, rx_x, rx_y):
+    """
+    通过 DOA 和仰角计算目标的位置
+    :param azimuth: 目标的方位角（度）
+    :param elevation: 目标的仰角（度）
+    :param range_estimate: 目标到接收机阵列的距离估算
+    :param rx_x: 接收机阵列的 x 坐标
+    :param rx_y: 接收机阵列的 y 坐标
+    :return: 目标的笛卡尔坐标 (x, y)
+    """
+    # 将角度转换为弧度
+    azimuth = np.deg2rad(azimuth)
+    elevation = np.deg2rad(elevation)
+
+    # 计算目标的 x 和 y 坐标
+    target_x = rx_x + range_estimate * np.cos(elevation) * np.cos(azimuth)
+    target_y = rx_y + range_estimate * np.cos(elevation) * np.sin(azimuth)
+
+    return target_x, target_y
